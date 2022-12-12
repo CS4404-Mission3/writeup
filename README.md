@@ -2,7 +2,38 @@
 IDS Evasion and adaptive IDS strategies
 
 # Reconnaissance
-TODO: Recon Section
+TODO:
+
+- Identify the sets of tools
+
+- Strengths
+
+- Weaknesses
+
+- How a defender would deploy them on a network
+
+- How performance and scalability goals may affect the technique’s ability to ensure certain security goals
+
+- Identify the goals an attacker may have in communication with compromised hosts and describe how these techniques may affect those goals
+
+- Explore research papers and other documents that can describe how to perform network monitoring effectively.
+
+  
+
+  For the SDN-based monitoring category, students must read and analyze the TLSDeputy paper by Taylor and Shue. That paper describes how OpenFlow and IDSes can be combined to achieve detailed insights into communication
+
+1. Packet inspection tools: Tools like Bro and Snort allow the deeper inspection of every packet they see and can apply rules or anomaly detection methods.
+   1. Strengths
+      1. Examines packet payload
+      2. Easy signatures
+      3. Can rn on 
+   2. Weaknesses
+   3. How a defender would deploy them on a network
+   4. How performance and scalability goals may affect the technique’s ability to ensure certain security goals
+   5. Identify the goals an attacker may have in communication with compromised hosts and describe how these techniques may affect those goals
+   6. Explore research papers and other documents that can describe how to perform network monitoring effectively.
+2. Flow monitoring tools: The popularity of NetFlow has resulted in a wide-range of flow collection and analysis tools.
+3. SDN-based monitoring: Within the SDN paradigm, multiple techniques have been created to explore network communication on a controller and middleboxes.
 
 # Infrastructure
 
@@ -28,9 +59,36 @@ Apart from this, the machines have a standard Ubuntu configuration. This include
 The VMs are on a private network with addressing starting at 192.168.1.100. This network has internet access via NAT through a virtual Pf Sense Firewall (also serving as DNS and DHCP server). Internet access is not required to reproduce our bot procedures but was used to simulate traffic and to make our lives easier when configuring the VMs. As the bot does not have propagation capabilities, and the firewall was configured to drop any outgoing mDNS traffic, this was deemed safe by the group members.
 
 ## Traffic Simulation
-The normal expected traffic was simulated by the python script `trafficsim.py` in the trafficsim repository. This bot would query google or perform a GET request to a number of websites repeatedly at random intervals from 1 to 15 seconds. Additionally, every cycle, the bot would perform a DNS query for a randomly selected site from the Alexa top 1 million list against 8.8.8.8. This bot was installed on each VM and auto-started on boot as a systemd service. This is included as a resource in the submission archive.
+We generate cover traffic with a Python script `sim.py` from the trafficsim repository.
+
+The simulator makes a few type of queries:
+
+- Google searches
+- HTTP connections to common websites
+- APT cache updates
+- DNS queries to random Alexa top 1 million websites
+
+We configure the traffic simulator by copying `sim.py` to the host in `/etc/trafficsim/sim.py`, then creating, reloading the daemon, and starting the service:
+
+```bash
+$ cat << EOF
+[Unit]
+Description=Traffic Simulator Service
+
+[Service]
+ExecStart=/usr/bin/python3 /etc/trafficsim/sim.py
+
+[Install]
+WantedBy=multi-user.target
+EOF | sudo tee /etc/systemd/system/sim.service
+$ sudo systemctl daemon-reload
+$ sudo systemctl enable --now sim
+```
+
+We also use Avahi to generate mDNS traffic TODO
 
 # Attack
+
 This attack scenario is a targeted compromise of an enterprise environment such as the worm with logic bomb payload that struck the Saudi Aramco company. The attack sequence as a general overview is as follows: An attacker compromises a host on the network via a poisoned dpkg package. Meanwhile, one of the hosts on the network segment must have the c2 server installed. This could be an attacker machine on the network or a compromised machine communicating with a remote attacker through a reverse shell.
 
 ## Covert Channel
@@ -173,7 +231,7 @@ The bots use the C2 mDNS covert channel described in the "covert channel" sectio
 ### User Interface
 The C2.py program must be run from a machine on the same network segment with root privileges, but this could be easily accomplished by a modified dpkg file as discussed above. Once installed, the attacker is presented with a user interface as shown below.
 
-![C2 main menu](/home/jake/Documents/CS4404-mission3/writeup/pictures/c2mainpage.png)
+![C2 main menu](pictures/c2mainpage.png)
 *Figure: The main menu of the C2 command line interface*
 
 This interface provides the above commands and serves as a wrapper around the channel.py communication suite. A video demonstrating the use of this tool along with a Wireshark capture demonstrating the mDNS traffic it generates was uploaded along with this document to Instruct Assist.
@@ -257,7 +315,7 @@ Our IDS combines an ID3 model with an ephemeral state table, temporal preprocess
 
 Our IDS needs to be able to process temporal information in order to detect our timing-based covert channel. Recurrent Neural Networks have this ability inherently, but ID3 does not. We maintain a small amount of state for a limited lifetime on the IDS to record timing information for each packet. The state table is keyed by a hash of the packet including it's source port, query class, type and name, as well as the AA, TC, RD, and RA flags. We round timestamps to the nearest 100ms to account for variability in network latency (jitter).
 
-Stateful IDS are dangerous as a network defender. An attacker wishing to overwhelm the IDS can generate lots of dissimilar traffic in order to fill the system's state table. Our IDS is designed to detect timing based cover channels, so it needs some sort of state. Our implementation uses a limited ephemeral state table that maps packets to the time they arrived at the IDS. The IDS will flush it's state table at a configurable time interval and state capacity threshold. These parameters should be tuned for the hardware capacity of the IDS machine - in our case, a 5 second cache retention and 100k capacity limit fit well within our VM specifications.
+Stateful IDS are dangerous as a network defender. An attacker wishing to overwhelm the IDS can generate lots of dissimilar traffic in order to fill the system's state table. Our IDS is designed to detect timing based cover channels, so it needs some sort of state. Our implementation uses a limited ephemeral state table that maps packets to the time they arrived at the IDS. The IDS will flush it's state table at a configurable time interval and state capacity threshold. These parameters should be tuned for the hardware capacity of the IDS machine - in our case, a 5 second cache retention and 100,000 entry capacity limit fit well within our VM specifications.
 
 ### Postprocessor
 
@@ -292,7 +350,7 @@ We then waited for the IDS to record about a thousand packets:
 
 ```bash
 $ watch 'wc -l training.csv'
-Every 2.0s: wc -l training.csv                                  orion: Sun Dec 11 23:48:50 2022
+Every 2.0s: wc -l training.csv orion: Sun Dec 11 23:48:50 2022
 
 1074 training.csv
 ```
@@ -337,6 +395,8 @@ TODO
 ### DAG Output
 
 After training, the IDS writes it's signature DAG to files in human readable form: a GraphViz file to render into a flowchart in `graphviz.txt`, and a pseudocode control flow representation in `graph.txt`.
+
+
 
 *GraphViz syntax for flowchart:*
 
