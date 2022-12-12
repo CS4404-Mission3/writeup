@@ -19,7 +19,7 @@ Each VM was cloned from an Ubuntu 22.04 template with the following added packag
 
 Apart from this, the machines have a standard Ubuntu configuration. This includes:
 * No firewall
-* No SELinux 
+* No SE Linux 
 * No Apparmor
 * No AV Scanner
 * avahi enabled
@@ -31,19 +31,21 @@ The VMs are on a private network with addressing starting at 192.168.1.100. This
 The normal expected traffic was simulated by the python script `trafficsim.py` in the bot repository. This bot would query google or perform a GET request to a number of websites repeatedly at random intervals from 1 to 15 seconds. Additionally, every cycle, the bot would perform a DNS query for a randomly selected site from the Alexa top 1 million list against 8.8.8.8. This bot was installed on each VM and auto-started on boot as a systemd service. 
 
 # Attack
-This attack scenario is a targeted compromise of an enterprise environment such as the worm with logic bomb payload that struck the Saudi Aramco company. The attack sequence as a general overview is as follows: An attacker compromises a host on the network via a poisoned dpkg package. This will install the bot agent on the compromised host and will immediately attempt to start traversing the network. Meanwhile, one of the hosts on the network segment must have the c2 server installed. This could be an attacker machine on the network or a compromised machine communicating with a remote attacker through a reverse shell.
+This attack scenario is a targeted compromise of an enterprise environment such as the worm with logic bomb payload that struck the Saudi Aramco company. The attack sequence as a general overview is as follows: An attacker compromises a host on the network via a poisoned dpkg package. Meanwhile, one of the hosts on the network segment must have the c2 server installed. This could be an attacker machine on the network or a compromised machine communicating with a remote attacker through a reverse shell.
 
 ## Covert Channel
 The covert channel used by the botnet was custom written for this project and implemented as a python library built on top of the scapy packet manipulation tool. Both the bot and C2 server implement this library for their communications. 
 
 ### Data payload
-The communications for the botnet's C2 is a custom protocol dubbed AuRevior (get it, like Apple Bonjour). It is built on mDNS on UDP on IP. mDNS (Multicast DNS) is a common protocol for local network service discovery, implemented by daemons like `avahi` for Linux. It is very common for hosts to be sending large amounts of Multicast traffic of this protocol on an enterprise network to discover services such as printers. AuRevior works by encoding bits as mDNS packets from different UDP source ports. These are sent is bursts or windows of 0.5 seconds and each window encodes 1 byte of payload data. This yields a transmission rate of 2 bytes per second. Each bit is encoded by whether or not an mDNS packet was sent from the corresponding source port during the window. By default, the AuRevior packet source ports range from 5350 to 5357. These packets all have a qclass of 255 (any).
+The communications for the botnet's C2 is a custom protocol dubbed AuRevior (get it, like Apple Bonjour). It is built on mDNS on UDP on IP. mDNS (Multicast DNS) is a common protocol for local network service discovery, implemented by daemons like `avahi` for Linux. It is very common for hosts to send large amounts of Multicast traffic of this protocol on an enterprise network to discover local services such as printers. AuRevior works by encoding bits as mDNS packets from different UDP source ports. These are sent is bursts or windows of 0.5 seconds and each window encodes 1 byte of payload data. This yields a transmission rate of 2 bytes per second. Each bit is encoded by whether or not an mDNS packet was sent from the corresponding source port during the window. By default, the AuRevior packet source ports range from 5350 to 5357. These packets all have a DNS qclass of 255 (any) to differentiate them from Pre/Post-ambles.
 
 For example, if a user wanted to transmit the data `0xAA` (0b10101010) the user would send 4 mDNS packets within 0.5 seconds. The packets would originate from ports 5350, 5352, 5354, and 5356 respectively. Conversely, if the user wanted to send `0x1` (0b00000001), they would send 1 mDNS packet in the 0.5 second frame, with a source port of 5357.
 
 The payload of each mDNS packet is a standard mDNS query and does not encode any information*. Should an IDS inspect each individual packet, it would not find anything out of the ordinary. The information is encoded solely by which packets were sent when. The payload has a variable length and the sender will transmit 1 byte every quarter second until it is finished. 
 
-The transmit windows are so big and thus the data rate is so slow because we want to minimize the impact of network latency changes and because we don't want the IDS to think we're trying to flood the network by transmitting massive amounts of mDNS traffic at once.
+The transmit windows are so big and thus the data rate is so slow because we want to minimize the impact of network latency on data integrity and because we don't want the IDS to think we're trying to flood the network by transmitting massive amounts of mDNS traffic at once.
+
+In short, the AuRevior protocol allows us to transmit data using normal packets, but the packets themselves do not contain any information. If an IDS were to look at each packet individually, they would see nothing other than a standard mDNS query. The data is conveyed simply by if the packet was sent or not in a given time-frame, so unless an IDS is able to keep track of packets in the time domain and detect that we're sending a lot of traffic at uneven intervals, they wouldn't notice anything. The other advantage to this approach is that, since all mDNS is broadcast, it is very hard to tell which host is the C2 server and which are the bots without reverse-engineering and decoding the communications, making the botnet significantly harder to stop once detected. 
 
 ### Preamble
 Each transmission is preceded by a 4 byte preamble of values 0xAA, 0x55, 0xAA, 0x55. (every odd bit, every even bit, repeat). This serves three important purposes:
@@ -61,10 +63,12 @@ While post-amble may not be a word, it is a part of the AuRevior transmission. T
 The bot is an agent written in python, registered as a systemd service. It supports covert information exfiltration and arbitrary code execution.
 
 ### Installation
-The bot is installed as part of a tampered VScode dpkg package. the reason we chose this is that VScode is popular software which is not in ububtu's default repositories which means this is one of the few programs for Linux that is expected to be installed by root from a package downloaded from a website. This allows us to bypass Linux's package management security model. 
-As part of the installation, the bot installs itself to `/usr/bin/avahi-ng` and registers an auto-enabled systemd service by the same name. Avahi is the most common mDNS / Bonjour/ Zeroconf utility for Linux so an application called avahi-ng broadcasting mDNS packets will not raise suspicion. The installer will also mask the real avahi service to prevent it from interfering with transmission. It also adds its own dependence, namely scapy and python3-bitarray, to those of VScode. This was done by disassembling the proper .deb file, modifying the DEBIAN files as shown below, and reassembling it with dpkg.
+**Note: This will not work in the secnet environment as it requires internet access. To test, please install manually.**
 
-Modifications to `DEBIAN/postinst`:
+The bot is installed as part of a tampered VScode dpkg package. the reason we chose this is that VScode is popular software which is *not* in Ububtu's default repositories, which means this is one of the few programs for Linux that is expected to be installed by root from a package downloaded from a website. This allows us to bypass Linux's package management security model. 
+As part of the installation, the bot installs itself to `/usr/bin/avahi-ng` and registers and enables a systemd service by the same name. Avahi is the most common mDNS / Bonjour / Zeroconf utility for Linux, so an application called avahi-ng broadcasting mDNS packets should not raise suspicion from any curious sysadmin. The installer will also mask the real avahi-daemon service to prevent it from interfering with transmission. It also adds its own dependence, namely scapy and python3-bitarray, to those of VScode. This was done by disassembling the proper .deb file, modifying the DEBIAN files as shown below, and reassembling it with dpkg.
+
+Additions to `DEBIAN/postinst`:
 ```bash
 systemctl mask avahi-daemon
 mkdir -p /etc/avahi-ng
@@ -89,4 +93,16 @@ The bots use the C2 mDNS covert channel described in the "covert channel" sectio
 * The `info` command instructs the bot to send back its hostname, local IP, and OS version.
 * The `abx` command precedes a string input by the user that the bot will execute with root privileges and then sends back the command's output.
 * `shutdown` simply turns off a specified host
-* `burnit` initiate's the bot's self-destruct mechanism, in which it uninstalls itself from the specified host. 
+* `burnit` initiate's the bot's self-destruct mechanism, in which it uninstalls itself from the specified host and re-enables normal avahi. 
+
+### Example commands
+1) User Selection: Check Network Status, Sent data: `c0000ping`
+2) User Selection: Run command `ls /` on host 3b27, Sent data `c3b27abx:ls /`
+
+### User Interface
+The C2.py program must be run from a machine on the same network segment with root privileges, but this could be easily accomplished by a modified dpkg file as discussed above. Once installed, the attacker is presented with a user interface as shown below. 
+
+![C2 main menu](/home/jake/Documents/CS4404-mission3/writeup/pictures/c2mainpage.png)
+*Figure: The main menu of the C2 command line interface*
+
+This interface provides the above commands and serves as a wrapper around the channel.py communication suite. A video demonstrating the use of this tool along with a Wireshark capture demonstrating the mDNS traffic it generates was uploaded along with this document to Instruct Assist. 
