@@ -2,38 +2,28 @@
 IDS Evasion and adaptive IDS strategies
 
 # Reconnaissance
-TODO:
 
-- Identify the sets of tools
+## Packet Inspection
+Tools such as Bro, Snort, and Suricata can inspect the content of packets on the network. These are usually installed on a firewall or on endpoints as it needs to be on-path for all packets. 
 
-- Strengths
+### Strengths
+* Examines packet payloads themselves to check for malicious payloads
+* Easily applies signature-based filtering
 
-- Weaknesses
+### Weaknesses
+* Most traffic nowadays is TLS encrypted, so the contents cannot be inspected
+* Signature-based methods do nothing against zero days or bespoke attacks
 
-- How a defender would deploy them on a network
+### Deployment
+For packet inspection to work, the IDS must be on-path for all communications on the network. In configurations where they are used as an IPS such as using snort alerts to generate firewall rules, the IPS must be in path. This means that these tools are usually installed on a network-wide firewall for on individual endpoints, depending on the use case. The software simply needs privileges to access pcap and capture packets from the NIC. Alerts may be written to a log, used to perform actions such as firewalling, or sent via slack or email to a member of IT. 
 
-- How performance and scalability goals may affect the technique’s ability to ensure certain security goals
-
-- Identify the goals an attacker may have in communication with compromised hosts and describe how these techniques may affect those goals
-
-- Explore research papers and other documents that can describe how to perform network monitoring effectively.
-
+### Performance
+Bro and snort are both single-threaded applications. This becomes problematic as server hardware and software is becoming increasingly focused on parallelism over single-core performance, meaning they cannot take advantage of the hardware it runs on. Bro or Snort becoming overloaded could load to false negatives as packets are dropped or the service to go down altogether. Dropping packets or going compromises the security goals of the tool as it is no longer able to ensure that data flowing through the network can be trusted. The on path nature of these tools also causes security implications. This makes it likely that the packet inspector is installed on a piece of critical piece of hardware such as a firewall or router. Under a high load, snort / bro could compromise the availability of the network as a whole. To avoid this, bro / snort could be on dedicated hardware or even behind a load balancer with packet mirroring from the firewall or router. However, this adds a significant amount of complexity for the deployment and more points of failure. A tool is only effective if it's actually used and it's only actually used if its benefits outweigh the difficulty in deployment and upkeep.
   
+References: [Performance Analysis of Snort using Network Function Virtualization](https://ieeexplore.ieee.org/document/8749024)
 
-  For the SDN-based monitoring category, students must read and analyze the TLSDeputy paper by Taylor and Shue. That paper describes how OpenFlow and IDSes can be combined to achieve detailed insights into communication
-
-1. Packet inspection tools: Tools like Bro and Snort allow the deeper inspection of every packet they see and can apply rules or anomaly detection methods.
-   1. Strengths
-      1. Examines packet payload
-      2. Easy signatures
-      3. Can rn on 
-   2. Weaknesses
-   3. How a defender would deploy them on a network
-   4. How performance and scalability goals may affect the technique’s ability to ensure certain security goals
-   5. Identify the goals an attacker may have in communication with compromised hosts and describe how these techniques may affect those goals
-   6. Explore research papers and other documents that can describe how to perform network monitoring effectively.
-2. Flow monitoring tools: The popularity of NetFlow has resulted in a wide-range of flow collection and analysis tools.
-3. SDN-based monitoring: Within the SDN paradigm, multiple techniques have been created to explore network communication on a controller and middleboxes.
+### Effect on attacker goals
+For an attacker to evade detection via a deep packet inspection IDS, the communication method must blend in with standard traffic. If the bot's packets are easily recognized by a signature, they are easily detected by the IDS. The attacker could also simply implement TLS in their C2 communications so that the packet payloads could not be analyzed by the packet inspector.
 
 # Infrastructure
 
@@ -46,7 +36,6 @@ Each VM was cloned from an Ubuntu 22.04 template with the following added packag
 * Python 3.10.6 (required)
 * python3-bitarray (for bit-level operations, required)
 * scapy (packet capture and generation, required)
-* Chicago95 (xfce4 theme, purely cosmetic with no impact on project outcome)
 
 Apart from this, the machines have a standard Ubuntu configuration. This includes:
 * No firewall
