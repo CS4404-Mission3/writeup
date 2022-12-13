@@ -1,5 +1,5 @@
 # Project 3
-IDS Evasion and adaptive IDS strategies
+Botnets, Covert Channels, and Adaptive IDS technologies
 Jacob Ellington and Nate Sales
 [https://github.com/CS4404-Mission3](https://github.com/CS4404-Mission3)
 
@@ -25,7 +25,7 @@ For packet inspection to work, the IDS must be on-path for all communications on
 
 ### Performance
 Bro and snort are both single-threaded applications. This becomes problematic as server hardware and software is becoming increasingly focused on parallelism over single-core performance, meaning they cannot take advantage of the hardware it runs on. Bro or Snort becoming overloaded could load to false negatives as packets are dropped or the service to go down altogether. Dropping packets or going compromises the security goals of the tool as it is no longer able to ensure that data flowing through the network can be trusted. The on path nature of these tools also causes security implications. This makes it likely that the packet inspector is installed on a piece of critical piece of hardware such as a firewall or router. Under a high load, snort / bro could compromise the availability of the network as a whole. To avoid this, bro / snort could be on dedicated hardware or even behind a load balancer with packet mirroring from the firewall or router. However, this adds a significant amount of complexity for the deployment and more points of failure. A tool is only effective if it's actually used and it's only actually used if its benefits outweigh the difficulty in deployment and upkeep.
-  
+
 References: [Performance Analysis of Snort using Network Function Virtualization](https://ieeexplore.ieee.org/document/8749024)
 
 ### Effect on attacker goals
@@ -104,7 +104,7 @@ $ sudo systemctl daemon-reload
 $ sudo systemctl enable --now sim
 ```
 
-We also use Avahi to generate mDNS traffic TODO
+We also use Avahi to generate mDNS traffic. We installed avahi-daemon with `sudo apt install -y avahi-daemon && sudo systemctl start avahi-daemon`.
 
 # Attack
 
