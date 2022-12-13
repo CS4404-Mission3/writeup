@@ -227,6 +227,8 @@ This interface provides the above commands and serves as a wrapper around the ch
 
 ## IDS
 
+Our IDS consists of two parts: an adaptive machine learning model that reads packets from a NIC with libpcap in userspace, and a hardware offload component using XDP for high throughput processing on hardware capable of kernel bypass networking.
+
 ### Signatures and Traffic Classification with Directed Acyclic Graphs
 
 At a high level, IDS apply known attack signatures to a traffic stream and fire an alert if a match is found. We chose to use Directed Acyclic Graphs (DAGs) to store and evaluate our IDS signatures. A DAG is a graph where logic flows in one direction only (*directed*) and doesn't contain loops (*acyclic*). When a packet is received by the IDS, it's first serialized into a minimal packet structure that includes fields from the UDP and DNS headers, as well as the time since a packet with the same header information was last seen.
@@ -348,8 +350,25 @@ Every 2.0s: wc -l training.csv orion: Sun Dec 11 23:48:50 2022
 
 To collect our dataset of malicious traffic, we masked and stopped `avahi-daemon` with `sudo systemctl mask avahi-daemon && sudo systemctl stop avahi-daemon`, then stopped our traffic simulator with `sudo systemctl stop sim`. We then started our C2 interface and ran queries to the bots to list their status and run UNIX commands on their host systems.
 
-```bash
-TODO: C2 interface
+```
+$ sudo python3 c2.py
+initializing communications...
+                                    C2 Interface v0.1                                     
+------------------------------------------------------------------------------------------
+
+Main Menu:
+
+1) Check Network Status
+2) Query Host Information
+3) Run Command
+4) Danger Zone
+5) Exit
+
+Warning: network status may be out of date, please re-test connections.
+
+ Please Select an Option: 1
+Sending command, please wait...
+sent
 ```
 
 Just like for the clean dataset, we collected around a thousand malicious packets. We then manually removed any spurious DNS packets from Ubuntu's telemetry/update processes.
@@ -377,15 +396,25 @@ Information Gains:
 ### Detecting malicious traffic
 
 ```bash
-$ sudo ./ids
-TODO
+$ sudo ./ids -i ens18
+INFO[0000] Running in IDS mode                          
+INFO[0000] Training ID3 model on 2147 packets           
+INFO[0000] TimeSinceLastPacket gain: 0.805587           
+INFO[0000] SourcePort gain: 0.904517                    
+INFO[0000] QClass gain: 0.770919                        
+INFO[0000] QType gain: 0.844262                         
+INFO[0000] QName gain: 0.939198                         
+INFO[0000] AA gain: 0.007857                            
+INFO[0000] TC gain: 0.000000                            
+INFO[0000] RD gain: 0.807426                            
+INFO[0000] RA gain: 0.282792                            
+INFO[0000] Listening on ens18                       
+WARN[0007] Detected malicious packet from 192.168.1.101:5353: {"AA":"false","IsMalicious":"true","QClass":"255","QName":"_services._dns-sd._udp.local.","QType":"12","RA":"false","RD":"false","SourcePort":"5353","TC":"false","TimeSinceLastPacket":"1s"}
 ```
 
 ### DAG Output
 
-After training, the IDS writes it's signature DAG to files in human readable form: a GraphViz file to render into a flowchart in `graphviz.txt`, and a pseudocode control flow representation in `graph.txt`.
-
-
+After training, the IDS writes its signature DAG to files in human readable form: both a GraphViz chart and a pseudocode graph. See `graph.txt` in this directory for the pseudocode output.
 
 *GraphViz syntax for flowchart:*
 
@@ -412,61 +441,187 @@ digraph {
 ```
 
 
+## Offloading IDS functionality to hardware with eBPF and XDP
 
-*Logic pseudocode:*
+Our adaptive IDS uses libpcap to read network frames from the NIC. This model depends on a complex datapath between the network and the IDS:
 
-```python
-switch QName:
-  case _services._dns-sd._udp.local.:
-    switch TimeSinceLastPacket:
-      case 1s:
-        switch SourcePort:
-          case 5355:
-            true
-          case 5357:
-            true
-          case 5353:
-            switch QClass:
-              case 4:
-                true
-              case 255:
-                true
-          case 5350:
-            true
-          case 5352:
-            true
-          case 5354:
-            true
-          case 5356:
-            true
-          case 5351:
-            true
-      case 4s:
-        switch QClass:
-          case 1:
-            false
-          case 255:
-            true
-      case 0s:
-        switch SourcePort:
-          case 5353:
-            switch QClass:
-              case 1:
-                false
-              case 4:
-                true
-          case 5350:
-            true
-          case 5352:
-            true
-          case 5354:
-            true
-          case 5356:
-            true
-          case 5351:
-            true
-          case 5355:
-            true
-          case 5357:
-            true
+1. NIC hardware receives bytes on the wire and assembles a frame
+2. Fires an interrupt to signal the kernel to dispatch a read worker to read the packet from one of the NIC's receive queues
+3. Our userspace IDS program in Go calls libpcap to apply a BPF filter to the stream
+4. Loads matching packets into userspace memory
+5. gopacket parses packet headers
+6. IDS can now filter on header fields
+
+This datapath is slow. Every matching packet that reaches the system is copied to userspace for analysis. We could use a modified sampling rate where only N percent of packets are processed by the IDS, but this would miss valuable traffic that may be malicious. We chose to design a second IDS that runs in conjunction with our adaptive userspace IDS to handle large packet floods in case our adaptive IDS is overwhelmed by a large packet flood. The kernel will start intentionally dropping packets to maintain system stability, and the userspace program has so much accumulated overhead from the kernel datapath that even if the kernel could keep up, the userspace program would not.
+
+### Berkeley Packet Filter
+
+The Berkeley Packet Filter, or BPF, is an interface for processing network traffic. It's initial version (now called Classic BPF or cBPF) was released in the 90s and is used by libpcap for coarse filtering. cBPF is still widely used - tcpdump filter strings are compiled to cBPF for use in libpcap. We use cBPF in our adaptive IDS to only copy UDP packets into our program.
+
+The Linux Kernel provides an extended version of BPF (eBPF) that adds to cBPF syntax with a flexible filtering language complete with maps for kernel/userspace data sharing, tracing, and a LLVM-compatible JIT compiler. eBPF programs are compiled to LLVM bytecode, which is then JIT compiled to a machine readable format.
+
+This is only one peice of the puzzle. eBPF provides packet processing capability, but we still need a way to interrupt the standard kernel network datapath to insert our eBPF program. The kernel has as solution for this too. eXpress Data Path, or XDP, is a kernel feature that uses eBPF bytecode to load rich logic into a system's network stack. XDP programs are directly attached to an interface and can run either in the kernel within the NIC's driver, or directly on certain NIC hardware ASICs.
+
+Our "offload IDS" uses XDP and eBPF to offload our entire detection pipeline into the NIC hardware. Our VMs are using virtio virtualized NICs, so in reality this behavior is virtualized, but this would work on real hardware (nfp and i40e NICs, for example).
+
+### Alerting from NIC hardware to userspace
+
+The offload IDS needs some way to pass alert information to userspace where it can alert network operators. This is a bit tricky - the XDP program runs on the NIC, so it needs to talk to the CPU over some hardware interface (PCIe), get picked up by the kernel, then copied to userspace. Luckily, BPF provides this functionality internally. We define the `bpf_printk` function to send a string to to BPF's `bpf_trace_printk` function.
+
+```c
+#define bpf_printk(fmt, ...)                           \
+({                                                     \
+	       char ____fmt[] = fmt;                       \
+	       bpf_trace_printk(____fmt, sizeof(____fmt),  \
+				##__VA_ARGS__);                        \
+})
 ```
+
+`bpf_trace_printk` uses the kernel's tracing API to send a string to the kernel tracepipe. These messages are viewable from userspace at `/sys/kernel/debug/tracing/trace_pipe`. A kernel trace endpoint may seem like a strange place for IDS alerts, but it has two features that make it ideal for network messaging: It has built in queuing and acts as a capacity limited FIFO when load increases. We'll see how this works in action later.
+
+
+### Packet processing with XDP
+
+Our offload IDS defines an XDP program section `SEC("prog")` to indicate where XDP should pass a frame context:
+
+```c
+SEC("prog")
+int xdp_prog_main(struct xdp_md *ctx) {
+    void *data_end = (void *)(long)ctx->data_end;
+    void *data = (void *)(long)ctx->data;
+    ...
+```
+
+`data` and `data_end` store the ethernet frame bytes, so our next step is parsing the Ethernet, IP, and UDP headers, while discarding packets that we don't care about:
+
+```c
+struct ethhdr *eth = data;
+if (eth + 1 > (struct ethhdr *)data_end) {
+	return XDP_DROP;
+}
+if (unlikely(eth->h_proto != htons(ETH_P_IP))) {
+	return XDP_PASS;
+}
+
+struct iphdr *iph = NULL;
+if (eth->h_proto == htons(ETH_P_IP)) {
+	iph = (data + sizeof(struct ethhdr));
+	if (unlikely(iph + 1 > (struct iphdr *)data_end)) {
+		return XDP_DROP;
+	}
+} else { // Skip non-IP
+	return XDP_PASS;
+}
+
+// Skip non-UDP
+if (!iph || iph->protocol != IPPROTO_UDP) {
+	return XDP_PASS;
+}
+
+// Parse UDP
+struct udphdr *udph = NULL;
+udph = (data + sizeof(struct ethhdr) + (iph->ihl * 4));
+if (udph + 1 > (struct udphdr *)data_end) {
+	return XDP_DROP;
+}
+```
+
+With the UDP header exposed, we can check our port range and print to the kernel tracepipe:
+
+```c
+if (udph->source == htons(5350) ...truncated... udph->source == htons(5357)) {
+    bpf_printk("Detected C2 packet from %d:%d\n", iph->saddr, ntohs(udph->source));
+	return XDP_DROP;
+}
+
+return XDP_PASS;
+```
+
+If a packet matches our filter, we return the XDP_DROP status to tell the NIC to drop the packet without forwarding it to the kernel. This removes load from the kernel, but also removes kernel (and therefore userspace) visibility into the network stream.
+
+To set up our offload IDS on a VM, we begin by copying our xdp-ids source to the VM:
+
+```bash
+# Install build dependencies
+$ sudo apt install -y build-essential libelf-dev clang git llvm
+<truncated>
+
+# Update libbpf submodule
+$ git submodule update --init
+Submodule 'libbpf' (https://github.com/libbpf/libbpf.git) registered for path 'libbpf'
+Cloning into '/home/tech1/xdp-router/libbpf'...
+Submodule path 'libbpf': checked out '7fc4d5025b22da2fd1a3f767b2973b7f28d21758'
+
+# Running "make" first compiles our XDP program (including eBPF expressions) to LLVM intermediate bytecode with clang, then uses LLVM's llc to compile it into a ELF object that can be loaded onto the NIC
+$ make
+make -C libbpf/src clean
+make[1]: Entering directory '/home/tech1/xdp-ids/libbpf/src'
+rm -rf *.o *.a *.so *.so.* *.pc ./sharedobjs ./staticobjs
+make[1]: Leaving directory '/home/tech1/xdp-ids/libbpf/src'
+rm -rf build/
+mkdir -p build/
+clang -I libbpf/src -D__BPF__ -O2 -emit-llvm -c -o build/kern_ids.bc main.c
+llc -march=bpf -filetype=obj -o build/kern_ids.o build/kern_ids.bc
+```
+
+LLVM emits an ELF object that can be loaded into the NIC with netlink:
+
+
+```bash
+$ sudo ip link set dev ens18 xdp obj kern_ids.o
+```
+
+At this point our program is running on the NIC and has been assigned an XDP program ID by the kernel:
+
+```bash
+$ ip link show dev ens18
+2: ens18: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 xdp/id:106 qdisc fq_codel state UP group default qlen 1000
+    link/ether da:34:2e:85:04:7f brd ff:ff:ff:ff:ff:ff
+    altname enp0s18
+```
+
+With the offload IDS program loaded, we're ready to execute a C2 command and monitor the kernel tracepipe:
+
+```
+$ sudo python3 c2.py
+initializing communications...
+                                    C2 Interface v0.1                                     
+------------------------------------------------------------------------------------------
+
+Main Menu:
+
+1) Check Network Status
+2) Query Host Information
+3) Run Command
+4) Danger Zone
+5) Exit
+
+Warning: network status may be out of date, please re-test connections.
+
+ Please Select an Option: 1
+Sending command, please wait...
+sent
+```
+
+Monitoring the kernel tracepipe shows our that our covert channel packets were detected correctly:
+
+```
+$ sudo cat /sys/kernel/debug/tracing/trace_pipe
+          <idle>-0       [001] d.s..  5722.470708: bpf_trace_printk: Detected C2 packet from 1677830336:5350
+          <idle>-0       [001] d.s..  5722.502635: bpf_trace_printk: Detected C2 packet from 1677830336:5352
+          <idle>-0       [001] d.s..  5722.534885: bpf_trace_printk: Detected C2 packet from 1677830336:5354
+          <idle>-0       [001] d.s..  5722.566746: bpf_trace_printk: Detected C2 packet from 1677830336:5356
+          <idle>-0       [001] d.s..  5722.978676: bpf_trace_printk: Detected C2 packet from 1677830336:5351
+^C
+```
+
+IP addresses are displayed in network byte order; converting 1677830336 to host bit order and to an IP address results in 192.168.1.100, the IP address of our C2 server.
+
+## Source Code
+
+All our code for this project is available from the [CS4404-Mission3](https://github.com/cs4404-mission3) GitHub organization.
+
+- [ids](https://github.com/CS4404-Mission3/ids): Adaptive userspace IDS
+- [bot](https://github.com/CS4404-Mission3/bot): Bot, C2, and covert channel
+- [xdp-ids](https://github.com/CS4404-Mission3/xdp-ids): XDP offload IDS
+- [trafficsim](https://github.com/CS4404-Mission3/trafficsim): Generate cover traffic for IDS testing
