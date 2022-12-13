@@ -1,6 +1,9 @@
 # Project 3
+
 Botnets, Covert Channels, and Adaptive IDS technologies
+
 Jacob Ellington and Nate Sales
+
 [https://github.com/CS4404-Mission3](https://github.com/CS4404-Mission3)
 
 # Introduction
