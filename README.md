@@ -1,5 +1,11 @@
 # Project 3
 IDS Evasion and adaptive IDS strategies
+Jacob Ellington and Nates Sales
+[https://github.com/CS4404-Mission3](https://github.com/CS4404-Mission3)
+
+# Introduction
+Many systems, from massive enterprise networks down to individual hosts, rely on Intrusion Detection Systems (IDS) as a part of their network security model. While they don't usually prevent attacks, they can detect them early in the attack sequence and help with a fast and effective remediation. If malware were able to avoid detection by an IDS, it would have the potential to cause significant damage, disruption, or loss to an organization. It is critical that an IDS be able to identify ever-evolving malicious software while keeping false positives to a minimum. Too many false positives would void the security goals of the IDS as IT security staff would likely being ignoring alerts or turn the system off entirely. We don't want to create the boy who called botnet. 
+
 
 # Reconnaissance
 
@@ -246,6 +252,12 @@ The C2.py program must be run from a machine on the same network segment with ro
 
 ![C2 main menu](pictures/c2mainpage.png)
 *Figure: The main menu of the C2 command line interface*
+
+![C2 host info](pictures/c2-hostinfo.png)
+*Figure: the C2 interface showing the network status and host info commands*
+
+![C2 arbitrary command execution](pictures/c2-exec.png)
+*Figure: the C2 interface showing the `ls` command being executed on a bot*
 
 This interface provides the above commands and serves as a wrapper around the channel.py communication suite. A video demonstrating the use of this tool along with a Wireshark capture demonstrating the mDNS traffic it generates was uploaded along with this document to Instruct Assist.
 
@@ -494,3 +506,6 @@ switch QName:
           case 5357:
             true
 ```
+
+# Conclusion
+The struggle between malware and IT security is a constant arms race in detection and evasion technologies. The bot and c2 infrastructure showcased in this project demonstrated a covert channel communication method that would be able to evade standard deep packet inspection and possibly even NetFlow systems by transmitting legitimate packets and specific times to encode information. While this proves that IDS implementations are not infallible, it also shows their effect on malware. It forces the botnet to use an extremely slow transmission rate to avoid detection. This would make data exfiltration on a large scale very tedious and give network security professionals ample time to detect the intrusion through other means.
