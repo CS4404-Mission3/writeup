@@ -54,6 +54,28 @@ If the attackers know that a network is using NetFlow but not any other IDS, the
 
 References: [Flow Monitoring Explained: From Packet Capture to Data Analysis With NetFlow and IPFIX](https://ieeexplore.ieee.org/document/6814316)
 
+## SDN Monitoring
+Software Defined Networking (SDN) allows dynamic routing of packets based on software rule sets as opposed to normal static network configurations. OpenFlow is a protocol that enables SDN. For example, this could allow conditional routing of traffic through a secure endpoint or rerouting of network data to a monitoring device. This could be used in an IDS role by redirecting or mirroring packets that meet a certain criteria to a dedicated monitoring server for deeper analysis. This provides an advantage over legacy bro deployments as the main analysis engine does not have to be on path under normal conditions.
+
+### Strengths
+* SDN monitoring is able to only inspect the most critical components of a data stream
+* able to use offsite resources for monitoring / verification
+
+### Weaknesses
+* Validating data via SDN monitoring is high-latency and relatively expensive
+* SDN doesn't act as an IDS on its own, would have to be combined with something else like deep packet inspection or an ML-based system.
+
+### Deployment
+If we were to design an IDS that uses SDN, we would set up OpenFlow on the core router and a lightweight filter for suspicious packets. This may be based on new connections from external IPs which have not connected before, a certain payload type, or certain port such as 22 (SSH) or 3389 (RDP). If these conditions were met, OpenFlow would redirect packets of that stream to a separate analysis server running deep packet inspection. In fact, the OpenFlow router could act as a load balancer, dynamically redirecting traffic to the least overwhelmed bro instance.
+
+### Performance
+The performance of this system depends heavily on the exact configuration that is deployed. OpenFlow has the potential to greatly increase performance over a standalone bro instance if implemented correctly, but could also significantly degrade network performance if it redirects too much data for analysis. An IDS must avoid noticeably slowing down network traffic as, if users become inconvenienced, they may disable it. However, OpenFlow has the potential for much better fail-over and fallback behavior should components of the inspection system go down as compared to more conventional approaches.
+
+### Effect on Attacker Goals
+An attacker must avoid detection by avoiding triggering an OpenFlow redirection. This could be done by modifying packet headers to pretend to be innocuous or by only injecting malicious payloads after the OpenFlow verification phase has completed.
+
+References: [Validating security protocols with cloud-based middleboxes](https://ieeexplore.ieee.org/document/7860493)
+
 
 # Infrastructure
 
