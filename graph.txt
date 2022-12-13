@@ -1,0 +1,53 @@
+switch QName:
+  case _services._dns-sd._udp.local.:
+    switch TimeSinceLastPacket:
+      case 1s:
+        switch SourcePort:
+          case 5355:
+            true
+          case 5357:
+            true
+          case 5353:
+            switch QClass:
+              case 4:
+                true
+              case 255:
+                true
+          case 5350:
+            true
+          case 5352:
+            true
+          case 5354:
+            true
+          case 5356:
+            true
+          case 5351:
+            true
+      case 4s:
+        switch QClass:
+          case 1:
+            false
+          case 255:
+            true
+      case 0s:
+        switch SourcePort:
+          case 5353:
+            switch QClass:
+              case 1:
+                false
+              case 4:
+                true
+          case 5350:
+            true
+          case 5352:
+            true
+          case 5354:
+            true
+          case 5356:
+            true
+          case 5351:
+            true
+          case 5355:
+            true
+          case 5357:
+            true
