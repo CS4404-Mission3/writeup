@@ -1,5 +1,11 @@
 # Project 3
 IDS Evasion and adaptive IDS strategies
+Jacob Ellington and Nate Sales
+[https://github.com/CS4404-Mission3](https://github.com/CS4404-Mission3)
+
+# Introduction
+Many systems, from massive enterprise networks down to individual hosts, rely on Intrusion Detection Systems (IDS) as a part of their network security model. While they don't usually prevent attacks, they can detect them early in the attack sequence and help with a fast and effective remediation. If malware were able to avoid detection by an IDS, it would have the potential to cause significant damage, disruption, or loss to an organization. It is critical that an IDS be able to identify ever-evolving malicious software while keeping false positives to a minimum. Too many false positives would void the security goals of the IDS as IT security staff would likely being ignoring alerts or turn the system off entirely. We don't want to create the boy who called botnet. 
+
 
 # Reconnaissance
 
@@ -25,6 +31,30 @@ References: [Performance Analysis of Snort using Network Function Virtualization
 ### Effect on attacker goals
 For an attacker to evade detection via a deep packet inspection IDS, the communication method must blend in with standard traffic. If the bot's packets are easily recognized by a signature, they are easily detected by the IDS. The attacker could also simply implement TLS in their C2 communications so that the packet payloads could not be analyzed by the packet inspector.
 
+## Flow Monitoring
+Flow monitors are a lighter-weight network monitoring methodology; this allows for greater potential performance with lower overhead but also less capability as compared to deep packet inspection. For the purposes of this paper, we will focus on Cisco NetFlow. Typically, a router (in this case any device running Cisco's confusingly named IOS), will run a Flow Exporter. This is an agent that sends data about every packet flowing through the router to a Flow Collector server. This data is not the entire packet, rather it typically contains source IP, destination IP, payload type (UDP, TCP, etc...), and packet size. This data will be stored by the flow collector for analysis by an analysis application. 
+
+### Strengths
+* Lightweight: The load of packet processing, storage, and analysis is split over multiple hosts. All the router has to do is forward packet metadata.
+* Scalable
+* Allows time-domain analysis. Since packets are stored by the flow collector, the analysis application can look at the flows of traffic over time to detect more complicated patterns that could not be detected by analyzing any single packet.
+
+### Weaknesses
+* Limited information. The data provided by NetFlow is quite limited. It cannot do any analysis on payload so live malware scanning is out of the question. 
+
+### Deployment
+For a NetFlow deployment, I would start with a core router (or routing firewall), a database server, and a client machine. I would install an agent on the router that captures every packet going through the machine, collects its metadata, and sends it to the database server. The database server would have an agent which listens for connections from the router and stores the metadata in a relational database. Finally, I would have a client machine that connects into the database and can perform whatever custom analysis is needed on the data stored therein. 
+
+### Performance
+Unlike Deep Packet Inspection, NetFlow and those like it are quite per formant and scalable. Because the amount of data that is actually analyzed is quite small as compared to full packets, there is minimal overhead on the router. This means that the security goal of availability is unlikely to be compromised. Additionally, the distributed architecture allows more of the processing strain to be shared by multiple hosts and for the system to be fault tolerant. Even if the analysis engine goes down, the packet capture and storage components will be unaffected and the analysis engine can start working through the backlog when it comes back online. This also allows for easier centralization of data from multiple sources, such as routers from multiple company facilities all feeding into one central database, allowing for greater overall visibility into the network status. 
+However, this performance is due to the fact that no analysis of packet content is done. This has security implications as NetFlow may not detect malicious payloads that a tool like snort would. However, the widespread use of end-to-end payload encryption reduces this comparative disadvantage.
+
+### Effect on Attacker Goals
+If the attackers know that a network is using NetFlow but not any other IDS, they could feel free to include obviously malicious, encrypted payload data but must be careful to conform to normal network data patterns in terms of source IP and transmission rates. The presence of NetFlow would dis-incentivize Denial of Service attacks. 
+
+References: [Flow Monitoring Explained: From Packet Capture to Data Analysis With NetFlow and IPFIX](https://ieeexplore.ieee.org/document/6814316)
+
+
 # Infrastructure
 
 ## VM Setup
@@ -39,7 +69,7 @@ Each VM was cloned from an Ubuntu 22.04 template with the following added packag
 
 Apart from this, the machines have a standard Ubuntu configuration. This includes:
 * No firewall
-* No SE Linux 
+* No SE Linux
 * No Apparmor
 * No AV Scanner
 * Avahi enabled
@@ -222,6 +252,12 @@ The C2.py program must be run from a machine on the same network segment with ro
 
 ![C2 main menu](pictures/c2mainpage.png)
 *Figure: The main menu of the C2 command line interface*
+
+![C2 host info](pictures/c2-hostinfo.png)
+*Figure: the C2 interface showing the network status and host info commands*
+
+![C2 arbitrary command execution](pictures/c2-exec.png)
+*Figure: the C2 interface showing the `ls` command being executed on a bot*
 
 This interface provides the above commands and serves as a wrapper around the channel.py communication suite. A video demonstrating the use of this tool along with a Wireshark capture demonstrating the mDNS traffic it generates was uploaded along with this document to Instruct Assist.
 
@@ -625,3 +661,6 @@ All our code for this project is available from the [CS4404-Mission3](https://gi
 - [bot](https://github.com/CS4404-Mission3/bot): Bot, C2, and covert channel
 - [xdp-ids](https://github.com/CS4404-Mission3/xdp-ids): XDP offload IDS
 - [trafficsim](https://github.com/CS4404-Mission3/trafficsim): Generate cover traffic for IDS testing
+
+# Conclusion
+The struggle between malware and IT security is a constant arms race in detection and evasion technologies. The bot and c2 infrastructure showcased in this project demonstrated a covert channel communication method that would be able to evade standard deep packet inspection and possibly even NetFlow systems by transmitting legitimate packets and specific times to encode information. While this proves that IDS implementations are not infallible, it also shows their effect on malware. It forces the botnet to use an extremely slow transmission rate to avoid detection. This would make data exfiltration on a large scale very tedious and give network security professionals ample time to detect the intrusion through other means.
